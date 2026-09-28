@@ -1,6 +1,6 @@
 import { memo, useCallback, useEffect, useId, useRef, useState } from "react"
 import { flushSync } from "react-dom"
-import { ArrowUpCircle, Bell, CalendarClock, Check, ChevronDown, ChevronRight, Copy, Database, Download, GripVertical, Layers, Palette, Pencil, Plus, Radio, RefreshCw, Search, Send, Server, Settings, Shield, SlidersHorizontal, Trash2, Upload } from "lucide-react"
+import { ArrowUpCircle, Bell, CalendarClock, Check, ChevronDown, ChevronRight, CircleQuestionMark, Copy, Database, Download, GripVertical, Layers, Palette, Pencil, Plus, Radio, RefreshCw, Search, Send, Server, Settings, Shield, SlidersHorizontal, Trash2, Upload } from "lucide-react"
 import { toast } from "sonner"
 
 import { Badge } from "@/components/ui/badge"
@@ -15,7 +15,7 @@ import { Switch } from "@/components/ui/switch"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import { api, badIfaceName, behind, changes, configFields, configForm, configOverrides, configSections, configValues, currentIface, fits, GIB, groupsOf, ifaceChoice, ifaceSpec, inGroup, outdatedAgents, provisioningSite, shortAddress, trafficCorrection, upload, type ConfigField, type IfaceChoice, type Node, type PingTask, type Source } from "@/lib/api"
-import { bytes, CYCLES, FOREVER, money, uptime } from "@/lib/format"
+import { bytes, cycleMonths, FOREVER, money, uptime } from "@/lib/format"
 
 // Counters the panel can correct after migration or an accounting error.
 const TRAFFIC_FIELDS = [
@@ -377,13 +377,45 @@ function Command({ className = "", children }: { className?: string; children: R
   )
 }
 
-function Field({ label, hint, className = "", children }: { label: string; hint?: string; className?: string; children: React.ReactNode }) {
+function Field({ label, hint, help, className = "", children }: {
+  label: string
+  hint?: string
+  help?: React.ReactNode
+  className?: string
+  children: React.ReactNode
+}) {
+  const title = <Label className="text-sm font-medium">{label}</Label>
   return (
     <div className={`space-y-2 ${className}`}>
-      <Label className="text-sm font-medium">{label}</Label>
+      {help ? <div className="flex items-center gap-1.5">{title}<Help>{help}</Help></div> : title}
       {children}
       {hint && <p className="text-xs leading-relaxed text-muted-foreground">{hint}</p>}
     </div>
+  )
+}
+
+// A tap shows no tooltip on its own, so a click opens it as well. The trigger's
+// own handlers would close it on press and on click; both are prevented.
+function Help({ children }: { children: React.ReactNode }) {
+  const [open, setOpen] = useState(false)
+  return (
+    <Tooltip open={open} onOpenChange={setOpen}>
+      <TooltipTrigger asChild>
+        <button
+          type="button"
+          aria-label="说明"
+          className="text-muted-foreground hover:text-foreground"
+          onPointerDown={(e) => e.preventDefault()}
+          onClick={(e) => {
+            e.preventDefault()
+            setOpen(true)
+          }}
+        >
+          <CircleQuestionMark className="size-3.5" />
+        </button>
+      </TooltipTrigger>
+      <TooltipContent className="max-w-64 space-y-1 text-left">{children}</TooltipContent>
+    </Tooltip>
   )
 }
 
@@ -855,6 +887,20 @@ function NodeForm({ node, nodes, onClose, onSaved }: {
   )
 }
 
+const CURRENCY_NAMES = new Intl.DisplayNames(["zh-CN"], { type: "currency" })
+
+// The name confirms a code the hub can only check the shape of. DisplayNames
+// echoes back a code outside ISO 4217 and throws on anything but three letters,
+// which the hub refuses with its own message.
+function currencyHint(code: string) {
+  try {
+    const name = CURRENCY_NAMES.of(code)
+    return name === code ? "未知代码，照原样显示" : name
+  } catch {
+    return undefined
+  }
+}
+
 function BillingForm({ node, onClose, onSaved }: {
   node: Node
   onClose: () => void
@@ -864,10 +910,17 @@ function BillingForm({ node, onClose, onSaved }: {
   // Text rather than a number: a numeric state cannot represent an empty field,
   // so clearing it would snap back to 0 mid-entry. Empty means free.
   const [price, setPrice] = useState(node.price > 0 ? String(node.price) : "")
+  // Whole years are entered in years, the way a five-year plan is sold.
+  const months = cycleMonths(node.billing_cycle)
+  const [unit, setUnit] = useState(months === 0 ? "once" : months % 12 ? "months" : "years")
+  const [count, setCount] = useState(String(months % 12 ? months : months / 12 || 1))
   const [saving, setSaving] = useState(false)
   const set = <K extends keyof Node>(k: K, v: Node[K]) => setForm((f) => ({ ...f, [k]: v }))
 
   async function save() {
+    // The hub refuses a length out of range and stores a named one by name, so
+    // an unchanged length is compared in months, not in spelling.
+    const cycle = unit === "once" ? "once" : `${Number(count) * (unit === "years" ? 12 : 1)}m`
     setSaving(true)
     try {
       await api(`/nodes/${node.id}`, {
@@ -875,7 +928,7 @@ function BillingForm({ node, onClose, onSaved }: {
         body: JSON.stringify(changes(node, {
           price: Math.max(0, Number(price) || 0),
           currency: form.currency,
-          billing_cycle: form.billing_cycle,
+          billing_cycle: cycleMonths(cycle) === months ? node.billing_cycle : cycle,
           expires_at: form.expires_at || null,
         })),
       })
@@ -908,27 +961,57 @@ function BillingForm({ node, onClose, onSaved }: {
                   placeholder="免费"
                 />
               </Field>
-              <Field label="货币">
-                <Select value={form.currency} onValueChange={(v) => set("currency", v)}>
-                  <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
-                  <SelectContent position="popper">
-                    {["USD", "CNY", "EUR", "GBP", "JPY"].map((c) => (
-                      <SelectItem key={c} value={c}>{c}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+              <Field
+                label="货币"
+                hint={currencyHint(form.currency.toUpperCase())}
+                help={
+                  <>
+                    <p>填三个字母的货币代码，大小写都行。</p>
+                    <p>
+                      例如：
+                      {["美元 USD", "人民币 CNY", "港币 HKD", "新台币 TWD", "欧元 EUR", "日元 JPY"].map((c, i) => (
+                        <span key={c}>{i > 0 && "、"}<span className="whitespace-nowrap">{c}</span></span>
+                      ))}
+                    </p>
+                  </>
+                }
+              >
+                {/* Uppercased by CSS: rewriting the value mid-composition would
+                    break an input method, and the hub stores it uppercased. */}
+                <Input
+                  maxLength={3}
+                  autoCapitalize="characters"
+                  spellCheck={false}
+                  className="uppercase"
+                  value={form.currency}
+                  onChange={(e) => set("currency", e.target.value)}
+                  placeholder="USD"
+                />
               </Field>
             </div>
             <div className="grid grid-cols-2 gap-4">
               <Field label="付款周期">
-                <Select value={form.billing_cycle} onValueChange={(v) => set("billing_cycle", v)}>
-                  <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
-                  <SelectContent position="popper">
-                    {Object.entries(CYCLES).map(([k, v]) => (
-                      <SelectItem key={k} value={k}>{v}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+                <div className="flex gap-2">
+                  {unit !== "once" && (
+                    <Input
+                      type="number"
+                      min="1"
+                      step="1"
+                      aria-label="周期长度"
+                      className="w-16"
+                      value={count}
+                      onChange={(e) => setCount(e.target.value)}
+                    />
+                  )}
+                  <Select value={unit} onValueChange={setUnit}>
+                    <SelectTrigger className="min-w-0 flex-1"><SelectValue /></SelectTrigger>
+                    <SelectContent position="popper">
+                      <SelectItem value="months">月</SelectItem>
+                      <SelectItem value="years">年</SelectItem>
+                      <SelectItem value="once">一次性</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
               </Field>
               <Field label="到期时间">
                 <Input type="date" value={form.expires_at ?? ""} onChange={(e) => set("expires_at", e.target.value)} />
