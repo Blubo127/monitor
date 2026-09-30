@@ -377,17 +377,18 @@ function Command({ className = "", children }: { className?: string; children: R
   )
 }
 
-function Field({ label, hint, help, className = "", children }: {
+function Field({ label, hint, help, helpWidth, className = "", children }: {
   label: string
   hint?: string
   help?: React.ReactNode
+  helpWidth?: string
   className?: string
   children: React.ReactNode
 }) {
   const title = <Label className="text-sm font-medium">{label}</Label>
   return (
     <div className={`space-y-2 ${className}`}>
-      {help ? <div className="flex items-center gap-1.5">{title}<Help>{help}</Help></div> : title}
+      {help ? <div className="flex items-center gap-1.5">{title}<Help width={helpWidth}>{help}</Help></div> : title}
       {children}
       {hint && <p className="text-xs leading-relaxed text-muted-foreground">{hint}</p>}
     </div>
@@ -396,6 +397,11 @@ function Field({ label, hint, help, className = "", children }: {
 
 // A tap shows no tooltip on its own, so a click opens it as well. The trigger's
 // own handlers would close it on press and on click; both are prevented.
+//
+// `width` is fitted to each text: the narrowest at which its paragraphs take the
+// fewest lines, plus some room for a wider font. A screen too narrow for that
+// gets the narrowest width holding the lines it can fit; capping the wide box
+// at the screen instead would leave its lines well short of the right edge.
 function Help({ children, width = "max-w-64" }: { children: React.ReactNode; width?: string }) {
   const [open, setOpen] = useState(false)
   return (
@@ -415,8 +421,16 @@ function Help({ children, width = "max-w-64" }: { children: React.ReactNode; wid
         </button>
       </TooltipTrigger>
       {/* text-wrap over the component's text-balance, which breaks multi-line
-          Chinese halfway across the box. */}
-      <TooltipContent collisionPadding={16} className={`${width} space-y-1 text-left text-wrap`}>{children}</TooltipContent>
+          Chinese halfway across the box. Chinese may also break between any
+          two characters, which splits words such as 季付 across lines; kept
+          whole, a line breaks at punctuation and spaces, and mid-run only when
+          a run cannot fit at all. */}
+      <TooltipContent
+        collisionPadding={16}
+        className={`${width} space-y-1 text-left text-wrap break-keep wrap-anywhere`}
+      >
+        {children}
+      </TooltipContent>
     </Tooltip>
   )
 }
@@ -966,6 +980,7 @@ function BillingForm({ node, onClose, onSaved }: {
               <Field
                 label="货币"
                 hint={currencyHint(form.currency.toUpperCase())}
+                helpWidth="max-w-72"
                 help={
                   <>
                     <p>填三个字母的货币代码，大小写都行。</p>
@@ -2142,7 +2157,7 @@ function Themes() {
         <div>
           <div className="flex items-center gap-1.5">
             <h3 className="text-sm font-medium">安装主题</h3>
-            <Help width="max-w-[min(28rem,calc(100vw-2rem))]">
+            <Help width="max-w-64 min-[480px]:max-w-112">
               <p>填主题的 GitHub 仓库地址，例如 <span className="whitespace-nowrap">https://github.com/作者/仓库</span></p>
               <p>仓库首页、Releases 页的地址都可以，总是安装最新的 release。</p>
               <p>也可以上传 release 里的 theme.tar.gz，不要选 Source code。</p>
@@ -2351,12 +2366,30 @@ function SettingsTab({ onSaved }: { onSaved: () => void }) {
           <Field label="站点名称">
             <Input value={String(s.site_name ?? "")} onChange={(e) => set("site_name", e.target.value)} placeholder="Monitor" />
           </Field>
-          <Field label="历史数据保留天数" hint="超出的明细自动清理，累计流量不受影响">
+          <Field
+            label="历史数据保留天数"
+            hint="1–365 天，超出的自动清理，累计流量不受影响"
+            helpWidth="max-w-66 min-[408px]:max-w-94"
+            help={
+              <>
+                <p>
+                  默认 <span className="whitespace-nowrap">30 天</span>，能看约一个月的历史。
+                </p>
+                <p>
+                  最近 <span className="whitespace-nowrap">7 天</span>
+                  {"按分钟保存，更早的按小时保存：超过一周的图表上，两者画出来几乎一样，按小时存只占几十分之一的空间。"}
+                </p>
+                <p>
+                  上限 <span className="whitespace-nowrap">365 天</span>。
+                </p>
+              </>
+            }
+          >
             <Input
               type="number"
               value={String(s.retention_days ?? "")}
               onChange={(e) => set("retention_days", e.target.value)}
-              placeholder="7"
+              placeholder="30"
             />
           </Field>
           <Field
@@ -2389,7 +2422,7 @@ function SettingsTab({ onSaved }: { onSaved: () => void }) {
                 // `||` rather than `??`: the hub returns "" for an unset key
                 // rather than null, and "" is the one value this key's write path
                 // refuses.
-                retention_days: String(s.retention_days || "7"),
+                retention_days: String(s.retention_days || "30"),
                 github_proxy: String(s.github_proxy ?? ""),
                 public_page: s.public_page === "off" ? "off" : "on",
               }).then((ok) => ok && onSaved())
@@ -2938,7 +2971,7 @@ function Data() {
         <div>
           <h3 className="text-sm font-medium">回收空间</h3>
           <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
-            按保留天数清掉过期明细，再重建数据库文件把空出来的页还给磁盘（SQLite 的 VACUUM）。重建期间需要与数据库等量的空闲磁盘，过程中面板和上报会短暂变慢。
+            清掉超出保留天数的历史，再重建数据库文件把空出来的页还给磁盘（SQLite 的 VACUUM）。重建期间需要约为数据库两倍的空闲磁盘，过程中面板和上报会短暂变慢。
           </p>
         </div>
         <div>
@@ -2984,7 +3017,7 @@ function Data() {
       {confirm === "vacuum" && (
         <ConfirmDialog
           title="回收空间？"
-          description="超出保留天数的历史明细会被删除，然后重建数据库文件。累计流量不受影响。"
+          description="超出保留天数的历史会被删除，然后重建数据库文件。累计流量不受影响。"
           confirmLabel={busy === "vacuum" ? "回收中…" : "开始回收"}
           busy={!!busy}
           onClose={() => setConfirm(null)}
