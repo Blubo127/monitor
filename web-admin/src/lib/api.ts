@@ -26,7 +26,6 @@ export type Metrics = {
 export type Node = {
   id: number
   name: string
-  sort: number
   public: boolean
   online: boolean
   last_seen: number
@@ -79,7 +78,7 @@ export type Node = {
   /** Panel only. The agent's reporting interval in seconds, read from its reports; null until two have arrived. */
   interval?: number | null
   remark?: string
-  /** Panel only. Empty for nodes created before the hub retained a copy. */
+  /** Panel only. */
   token?: string
   /** Panel only. Whether going offline and returning are announced. */
   notify?: boolean
