@@ -2,6 +2,8 @@
 
 文档：[monitor-document.pages.dev](https://monitor-document.pages.dev)，安装、配置、反向代理与主题开发都在这里。
 
+主题站：[monitor-themes.pages.dev](https://monitor-themes.pages.dev)，在线预览各个公开页主题，复制地址即可在面板安装。
+
 ## 特性
 
 - 实时监控：秒级实时数据展示
