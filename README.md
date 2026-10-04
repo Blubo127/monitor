@@ -18,6 +18,7 @@
 | [monitor](https://github.com/monitor-probe/monitor) | hub：后台、API、公开页宿主 |
 | [agent](https://github.com/monitor-probe/agent) | Linux agent |
 | [monitor-theme-default](https://github.com/monitor-probe/monitor-theme-default) | 内置默认主题 |
+| [themes](https://github.com/monitor-probe/themes) | 主题站：收录第三方主题，提供在线预览 |
 
 ```
 agent (Linux)  ──WebSocket / JSON-RPC 2.0──▶  hub (axum + SQLite)  ──▶  后台 + 状态页
