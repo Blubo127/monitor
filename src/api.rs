@@ -1189,9 +1189,34 @@ pub async fn save_ping_task(_: Admin, State(app): State<Shared>, Json(mut task):
     }
     match app.db.save_ping_task(&task) {
         Ok(id) => {
-            agent_ws::push_ping_tasks(&app);
+            agent_ws::push_ping_tasks(&app, None);
             Json(json!({"id": id})).into_response()
         }
+        Err(e) => fail(e),
+    }
+}
+
+/// The probes ticked for one node, and `base`, those it had when the editor
+/// opened; see `Db::set_node_ping_tasks`.
+#[derive(Deserialize)]
+pub struct NodeProbes {
+    tasks: Vec<i64>,
+    base: Vec<i64>,
+}
+
+pub async fn set_node_ping_tasks(
+    _: Admin,
+    State(app): State<Shared>,
+    Path(id): Path<i64>,
+    body: Result<Json<NodeProbes>, JsonRejection>,
+) -> Response {
+    let Ok(Json(probes)) = body else { return bad("监控列表格式不对") };
+    match app.db.set_node_ping_tasks(id, &probes.tasks, &probes.base) {
+        Ok(true) => {
+            agent_ws::push_ping_tasks(&app, Some(id));
+            Json(json!({"ok": true})).into_response()
+        }
+        Ok(false) => no_such_node(),
         Err(e) => fail(e),
     }
 }
@@ -1199,7 +1224,7 @@ pub async fn save_ping_task(_: Admin, State(app): State<Shared>, Json(mut task):
 pub async fn delete_ping_task(_: Admin, State(app): State<Shared>, Path(id): Path<i64>) -> Response {
     match app.db.delete_ping_task(id) {
         Ok(()) => {
-            agent_ws::push_ping_tasks(&app);
+            agent_ws::push_ping_tasks(&app, None);
             Json(json!({"ok": true})).into_response()
         }
         Err(e) => fail(e),

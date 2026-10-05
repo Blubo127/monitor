@@ -302,14 +302,20 @@ function GroupFilter({ nodes, value, onChange, className = "" }: {
   )
 }
 
-function NodeSearch({ value, onChange, className = "" }: { value: string; onChange: (value: string) => void; className?: string }) {
+function NodeSearch({ value, onChange, className = "", placeholder = "名称/地址/地区/分组", label = "搜索节点" }: {
+  value: string
+  onChange: (value: string) => void
+  className?: string
+  placeholder?: string
+  label?: string
+}) {
   return (
     <div className={`relative ${className}`}>
       <Search className="pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-muted-foreground" />
       <Input
         className="pl-8"
-        placeholder="名称/地址/地区/分组"
-        aria-label="搜索节点"
+        placeholder={placeholder}
+        aria-label={label}
         value={value}
         onChange={(e) => onChange(e.target.value)}
         // Inside a dialog's form, Enter would otherwise save the dialog.
@@ -319,9 +325,51 @@ function NodeSearch({ value, onChange, className = "" }: { value: string; onChan
   )
 }
 
-// Ticks nodes in a searchable grid. 全选 and 全不选 act on the rows in view, so a
-// search or a group narrows what they touch: pick a group, then 全选. Offline
-// nodes are dimmed but remain selectable.
+// Ticks items in a searchable list. 全选 and 全不选 act on the rows in view, so a
+// search or a filter narrows what they touch: pick a group, then 全选. The
+// callers own the search and pass in what it leaves visible.
+function Picker<T extends { id: number }>({ visible, chosen, onPick, disabled = false, toolbar, empty, listClass, title, children }: {
+  visible: T[]
+  chosen: Set<number>
+  onPick: (list: T[], on: boolean) => void
+  disabled?: boolean
+  toolbar: React.ReactNode
+  empty: string
+  listClass: string
+  title: (item: T) => string
+  children: (item: T) => React.ReactNode
+}) {
+  // The unfiltered list's height, held as its floor: in a centred dialog a
+  // shrinking list would move the search box out from under the cursor.
+  const [listHeight, setListHeight] = useState(0)
+  const visibleChosen = visible.filter((n) => chosen.has(n.id)).length
+  return (
+    <div className="rounded-lg border">
+      <div className="flex flex-wrap items-center gap-1 border-b p-2">
+        {toolbar}
+        <Button type="button" size="sm" variant="ghost" className="px-2.5" disabled={disabled || visibleChosen === visible.length} onClick={() => onPick(visible, true)}>全选</Button>
+        <Button type="button" size="sm" variant="ghost" className="px-2.5" disabled={disabled || visibleChosen === 0} onClick={() => onPick(visible, false)}>全不选</Button>
+      </div>
+      <div
+        ref={(el) => { if (el && !listHeight) setListHeight(el.offsetHeight) }}
+        // Capped like the height itself, which a min-height would otherwise
+        // override once the viewport shrinks.
+        style={{ minHeight: listHeight ? `min(${listHeight}px, 16rem, 40dvh)` : undefined }}
+        className={`grid max-h-[min(16rem,40dvh)] content-start gap-0.5 overflow-y-auto p-1.5 ${listClass}`}
+      >
+        {visible.map((item) => (
+          <label key={item.id} title={title(item)} className="flex min-w-0 cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-sm hover:bg-muted">
+            <input type="checkbox" checked={chosen.has(item.id)} disabled={disabled} onChange={(e) => onPick([item], e.target.checked)} className="shrink-0 accent-primary" />
+            {children(item)}
+          </label>
+        ))}
+        {!visible.length && <p className="col-span-full p-2 text-xs text-muted-foreground">{empty}</p>}
+      </div>
+    </div>
+  )
+}
+
+// Offline nodes are dimmed but remain selectable.
 function NodePicker({ nodes, chosen, onPick, disabled = false }: {
   nodes: Node[]
   chosen: Set<number>
@@ -330,40 +378,54 @@ function NodePicker({ nodes, chosen, onPick, disabled = false }: {
 }) {
   const [query, setQuery] = useState("")
   const [group, setGroup] = useGroupFilter(nodes)
-  // The unfiltered list's height, held as its floor: in a centred dialog a
-  // shrinking list would move the search box out from under the cursor.
-  const [listHeight, setListHeight] = useState(0)
-  const visible = inGroup(searchNodes(nodes, query), group)
-  const visibleChosen = visible.filter((n) => chosen.has(n.id)).length
   return (
-    <div className="rounded-lg border">
-      <div className="flex flex-wrap items-center gap-1 border-b p-2">
+    <Picker
+      visible={inGroup(searchNodes(nodes, query), group)}
+      chosen={chosen}
+      onPick={onPick}
+      disabled={disabled}
+      toolbar={<>
         <NodeSearch className="min-w-0 flex-1 basis-40" value={query} onChange={setQuery} />
         <GroupFilter nodes={nodes} value={group} onChange={setGroup} className="w-32" />
-        <Button type="button" size="sm" variant="ghost" className="px-2.5" disabled={disabled || visibleChosen === visible.length} onClick={() => onPick(visible, true)}>全选</Button>
-        <Button type="button" size="sm" variant="ghost" className="px-2.5" disabled={disabled || visibleChosen === 0} onClick={() => onPick(visible, false)}>全不选</Button>
-      </div>
-      {/* Three columns keep a few dozen nodes within one scroll. A phone gets
-          one: two cut a name to a few characters, and a tap shows no title. */}
-      <div
-        ref={(el) => { if (el && !listHeight) setListHeight(el.offsetHeight) }}
-        // Capped like the height itself, which a min-height would otherwise
-        // override once the viewport shrinks.
-        style={{ minHeight: listHeight ? `min(${listHeight}px, 16rem, 40dvh)` : undefined }}
-        className="grid max-h-[min(16rem,40dvh)] grid-cols-1 content-start gap-0.5 overflow-y-auto p-1.5 min-[480px]:grid-cols-2 sm:grid-cols-3"
-      >
-        {visible.map((n) => (
-          <label key={n.id} title={n.group ? `${n.name} · ${n.group}` : n.name} className="flex min-w-0 cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-sm hover:bg-muted">
-            <input type="checkbox" checked={chosen.has(n.id)} disabled={disabled} onChange={(e) => onPick([n], e.target.checked)} className="shrink-0 accent-primary" />
-            <span className={`truncate ${n.online ? "" : "text-muted-foreground"}`}>{n.name}</span>
-            {n.country && <span className="ml-auto shrink-0 text-xs text-muted-foreground">{n.country}</span>}
-          </label>
-        ))}
-        {!visible.length && (
-          <p className="col-span-full p-2 text-xs text-muted-foreground">{nodes.length ? "没有匹配的节点" : "先添加节点"}</p>
-        )}
-      </div>
-    </div>
+      </>}
+      empty={nodes.length ? "没有匹配的节点" : "先添加节点"}
+      // Three columns keep a few dozen nodes within one scroll. A phone gets
+      // one: two cut a name to a few characters, and a tap shows no title.
+      listClass="grid-cols-1 min-[480px]:grid-cols-2 sm:grid-cols-3"
+      title={(n) => (n.group ? `${n.name} · ${n.group}` : n.name)}
+    >
+      {(n) => <>
+        <span className={`truncate ${n.online ? "" : "text-muted-foreground"}`}>{n.name}</span>
+        {n.country && <span className="ml-auto shrink-0 text-xs text-muted-foreground">{n.country}</span>}
+      </>}
+    </Picker>
+  )
+}
+
+// One probe per row, with the target and interval that tell two of a name apart.
+function ProbePicker({ tasks, chosen, onPick }: {
+  tasks: PingTask[]
+  chosen: Set<number>
+  onPick: (list: PingTask[], on: boolean) => void
+}) {
+  const [query, setQuery] = useState("")
+  const needle = query.trim().toLowerCase()
+  return (
+    <Picker
+      visible={needle ? tasks.filter((t) => `${t.name} ${t.target}`.toLowerCase().includes(needle)) : tasks}
+      chosen={chosen}
+      onPick={onPick}
+      toolbar={<NodeSearch className="min-w-0 flex-1 basis-32" value={query} onChange={setQuery} placeholder="名称/目标" label="搜索监控" />}
+      empty={tasks.length ? "没有匹配的监控" : "还没有延迟监控，先点「添加监控」"}
+      listClass="grid-cols-1"
+      title={(t) => `${t.name} · ${t.target}`}
+    >
+      {(t) => <>
+        <span className="min-w-0 flex-1 truncate">{t.name}</span>
+        <span className="tnum max-w-[45%] shrink-0 truncate text-xs text-muted-foreground">{t.target}</span>
+        <span className="tnum w-12 shrink-0 text-right text-xs text-muted-foreground">{t.interval}s</span>
+      </>}
+    </Picker>
   )
 }
 
@@ -1782,12 +1844,146 @@ function PingForm({ task, nodes, onClose, onSaved }: {
   )
 }
 
+// One node's probes, ticked from the node's side. Saves only what changed from
+// the list it opened with, as PingForm does for a probe's nodes.
+function NodeProbesForm({ node, tasks, onClose, onSaved }: {
+  node: Node
+  tasks: PingTask[]
+  onClose: () => void
+  onSaved: () => void
+}) {
+  const [base] = useState(() => tasks.filter((t) => t.nodes.includes(node.id)).map((t) => t.id))
+  const [chosen, setChosen] = useState(() => new Set(base))
+  const [saving, setSaving] = useState(false)
+  // Taken from the live list: `chosen` can still hold a probe deleted since the
+  // dialog opened, which the list no longer shows to untick.
+  const ticked = tasks.filter((t) => chosen.has(t.id)).map((t) => t.id)
+
+  const pick = (list: PingTask[], on: boolean) =>
+    setChosen((c) => {
+      const next = new Set(c)
+      for (const t of list) {
+        if (on) next.add(t.id)
+        else next.delete(t.id)
+      }
+      return next
+    })
+
+  async function save() {
+    setSaving(true)
+    try {
+      await api(`/nodes/${node.id}/ping-tasks`, { method: "PUT", body: JSON.stringify({ tasks: ticked, base }) })
+      toast.success("已保存，正在下发")
+      onClose()
+      onSaved()
+    } catch (e) {
+      toast.error((e as Error).message)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <Dialog open onOpenChange={(open) => !open && onClose()}>
+      <DialogContent onOpenAutoFocus={(e) => e.preventDefault()} className="sm:max-w-xl">
+        <DialogHeader>
+          <DialogTitle className="break-all">「{node.name}」的延迟监控</DialogTitle>
+        </DialogHeader>
+        <form noValidate className="contents" onSubmit={(e) => { e.preventDefault(); save() }}>
+          {/* min-w-0: as a grid item the list would otherwise grow to its
+              widest target and push the dialog past a phone's edge. */}
+          <section className="min-w-0 space-y-3">
+            <div className="flex items-baseline justify-between gap-2">
+              <h3 className="text-sm font-medium">运行的监控</h3>
+              <span className="tnum text-xs text-muted-foreground">已选 {ticked.length} / {tasks.length}</span>
+            </div>
+            <ProbePicker tasks={tasks} chosen={chosen} onPick={pick} />
+          </section>
+          <DialogFooter>
+            <Button type="button" variant="ghost" onClick={onClose}>取消</Button>
+            <Button type="submit" disabled={saving}>保存</Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+// The probes seen from the nodes: one row per node, so a machine's whole set is
+// read and edited in one place.
+function PingByNode({ nodes, tasks, reload }: { nodes: Node[]; tasks: PingTask[]; reload: () => void }) {
+  const [query, setQuery] = useState("")
+  const [group, setGroup] = useGroupFilter(nodes)
+  const [editing, setEditing] = useState<Node | null>(null)
+  const visible = inGroup(searchNodes(nodes, query), group)
+  const owned = new Map(nodes.map((n) => [n.id, [] as PingTask[]]))
+  for (const t of tasks) for (const id of t.nodes) owned.get(id)?.push(t)
+
+  return (
+    <>
+      <div className="flex gap-2">
+        <NodeSearch className="min-w-0 flex-1 sm:w-64 sm:flex-none" value={query} onChange={setQuery} />
+        <GroupFilter nodes={nodes} value={group} onChange={setGroup} className="w-32" />
+      </div>
+      <Card className="overflow-x-auto p-0">
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead className="w-[30%]">节点</TableHead>
+              <TableHead>监控</TableHead>
+              <TableHead className="w-0 text-right">操作</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {visible.map((n) => {
+              const mine = owned.get(n.id) ?? []
+              const names = mine.map((t) => t.name).join("、")
+              return (
+                <TableRow key={n.id}>
+                  <TableCell className="whitespace-normal">
+                    <div className="font-medium text-balance break-keep">{nameText(n.name)}</div>
+                    {n.group && <div className="text-xs text-balance text-muted-foreground">{n.group}</div>}
+                  </TableCell>
+                  {/* max-w-0 lets the cell take what is left and no more, so a
+                      long list truncates instead of widening the table. */}
+                  <TableCell className="max-w-0 text-sm">
+                    {mine.length ? (
+                      <div className="truncate" title={names}>
+                        <span className="tnum">{mine.length} 个</span>
+                        <span className="text-muted-foreground"> · {names}</span>
+                      </div>
+                    ) : (
+                      <span className="text-muted-foreground">未配置</span>
+                    )}
+                  </TableCell>
+                  <TableCell className="text-right">
+                    <Button variant="ghost" size="icon" onClick={() => setEditing(n)} title="选择监控" aria-label="选择监控"><Pencil /></Button>
+                  </TableCell>
+                </TableRow>
+              )
+            })}
+            {!visible.length && (
+              <TableRow>
+                <TableCell colSpan={3} className="py-10 text-center text-sm text-muted-foreground">
+                  {nodes.length ? "没有匹配的节点" : "还没有节点"}
+                </TableCell>
+              </TableRow>
+            )}
+          </TableBody>
+        </Table>
+      </Card>
+      {editing && <NodeProbesForm node={editing} tasks={tasks} onClose={() => setEditing(null)} onSaved={reload} />}
+    </>
+  )
+}
+
 function Ping({ nodes }: { nodes: Node[] }) {
   // null until loaded, so the empty state does not flash before the list.
   const [tasks, setTasks] = useState<PingTask[] | null>(null)
   const [editing, setEditing] = useState<Partial<PingTask> | null>(null)
   const [deleting, setDeleting] = useState<PingTask | null>(null)
   const [removing, setRemoving] = useState(false)
+  const [view, setView] = useState<"task" | "node">("task")
 
   // A failed first load draws the page empty, keeping 添加监控 in reach.
   const load = () =>
@@ -1821,13 +2017,25 @@ function Ping({ nodes }: { nodes: Node[] }) {
   if (!tasks) return null
   return (
     <div className="space-y-4">
-      <div className="flex justify-end">
+      <div className="flex items-center justify-between gap-2">
+        <div role="group" aria-label="视图" className="inline-flex rounded-lg bg-muted p-0.5">
+          {(["task", "node"] as const).map((v) => (
+            <button
+              key={v}
+              aria-pressed={view === v}
+              onClick={() => setView(v)}
+              className={`rounded-md px-3 py-1 text-sm transition-colors ${view === v ? "bg-background font-medium shadow-sm" : "text-muted-foreground hover:text-foreground"}`}
+            >
+              {v === "task" ? "按监控" : "按节点"}
+            </button>
+          ))}
+        </div>
         <Button onClick={() => setEditing({ name: "", target: "", interval: 60, nodes: nodes.map((n) => n.id), auto_join: true })}>
           <Plus /> 添加监控
         </Button>
       </div>
 
-      <Card className="overflow-x-auto p-0">
+      {view === "node" ? <PingByNode nodes={nodes} tasks={tasks} reload={load} /> : <Card className="overflow-x-auto p-0">
         <Table>
           <TableHeader>
             <TableRow>
@@ -1870,7 +2078,7 @@ function Ping({ nodes }: { nodes: Node[] }) {
             )}
           </TableBody>
         </Table>
-      </Card>
+      </Card>}
 
       {editing && <PingForm task={editing} nodes={nodes} onClose={() => setEditing(null)} onSaved={load} />}
       {deleting && (
