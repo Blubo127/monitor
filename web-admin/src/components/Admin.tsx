@@ -50,11 +50,18 @@ function slide(rows: HTMLTableSectionElement | null, update: () => void) {
 // Rows are displaced while the pointer is down and the whole order is saved on
 // release, so a filtered table must disable its handles: the rows on screen are
 // then not `order`.
+//
+// Pointer events, not HTML5 drag and drop: a touch never starts a native drag,
+// and where Android synthesizes one from a long press, `dropEffect` reads
+// "none" on every release, so each drop would count as cancelled.
 function useDragOrder<T extends { id: number }>(items: T[], path: string, reload: () => void) {
   const [manualOrder, setManualOrder] = useState<number[]>([])
   const [dragging, setDragging] = useState<number | null>(null)
   const orderBeforeDrag = useRef<number[]>([])
   const body = useRef<HTMLTableSectionElement | null>(null)
+  // The pointer that owns the drag, where it was pressed, and where it last
+  // was: a scroll moves rows under a pointer that holds still.
+  const pointer = useRef({ id: 0, x: 0, y: 0, y0: 0 })
   // One save in flight at a time, so two quick reorders reach the hub in order.
   const saving = useRef<Promise<unknown>>(Promise.resolve())
   const byId = new Map(items.map((item) => [item.id, item]))
@@ -75,25 +82,21 @@ function useDragOrder<T extends { id: number }>(items: T[], path: string, reload
   // pointer: a sliding row is drawn away from its place, and the one under the
   // pointer mid-slide is not the one it would displace. Re-attached on every
   // render, since `order` changes as rows are displaced.
-  //
-  // Dragenter is accepted as well as dragover: over a new element the browser
-  // fires only dragenter until its next update, and a release in between -- as
-  // when a reorder brings another row under a still pointer -- would otherwise
-  // count as a drop outside and restore the order.
   useEffect(() => {
     const rows = body.current
     if (dragging === null || !rows) return
-    const over = (e: DragEvent) => {
-      // The header row counts as inside: a drag to the top readily overshoots
-      // onto it, and a release there would otherwise discard the drag.
+    const p = pointer.current
+    // The header row counts as inside: a drag to the top readily overshoots
+    // onto it, and a release there would otherwise discard the drag.
+    const inside = () => {
       const table = rows.parentElement!.getBoundingClientRect()
-      if (e.clientX < table.left || e.clientX > table.right || e.clientY < table.top || e.clientY > table.bottom) return
-      e.preventDefault()
-      if (e.type === "drop") return
-      if (e.dataTransfer) e.dataTransfer.dropEffect = "move"
+      return p.x >= table.left && p.x <= table.right && p.y >= table.top && p.y <= table.bottom
+    }
+    const at = () => {
+      if (!inside()) return
       const list = [...rows.rows]
       // Offsets count from the rows' container, which does not slide.
-      const y = e.clientY - list[0].offsetParent!.getBoundingClientRect().top
+      const y = p.y - list[0].offsetParent!.getBoundingClientRect().top
       const from = list.findIndex((row) => row.dataset.id === String(dragging))
       const to = list.findIndex((row) => y >= row.offsetTop && y < row.offsetTop + row.offsetHeight)
       if (from < 0 || to < 0 || from === to) return
@@ -105,12 +108,55 @@ function useDragOrder<T extends { id: number }>(items: T[], path: string, reload
       if (to > from ? y < target.offsetTop + target.offsetHeight - height : y >= target.offsetTop + height) return
       move(dragging, to)
     }
-    const types = ["dragenter", "dragover", "drop"] as const
-    for (const type of types) document.addEventListener(type, over)
+    const onPointer = (e: PointerEvent) => {
+      if (e.pointerId !== p.id) return
+      p.x = e.clientX
+      p.y = e.clientY
+      // A move with no button down follows a release the page never saw, as
+      // when a context menu took it; the drag would otherwise trail the
+      // pointer until the next click saved wherever it was.
+      if (e.type === "pointermove" && e.buttons) at()
+      else if (e.type === "pointerup" && inside()) save(ids())
+      else cancel()
+    }
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && cancel()
+    const types = ["pointermove", "pointerup", "pointercancel"] as const
+    for (const type of types) document.addEventListener(type, onPointer)
+    document.addEventListener("keydown", onKey)
+    addEventListener("scroll", at)
     return () => {
-      for (const type of types) document.removeEventListener(type, over)
+      for (const type of types) document.removeEventListener(type, onPointer)
+      document.removeEventListener("keydown", onKey)
+      removeEventListener("scroll", at)
     }
   })
+
+  // While a drag lasts. A touch on the handle never scrolls the page
+  // (`touch-none`), so a drag held near the top or bottom edge scrolls it,
+  // faster the closer it gets -- only toward the edge it has moved toward, or
+  // a press on a row near the edge would scroll rows under a still pointer.
+  // The cursor is flagged on the root once per drag: a `:has()` on the dragged
+  // row would restyle the whole page on every displacement, 25 times the style
+  // work of a drag across 200 nodes.
+  useEffect(() => {
+    if (dragging === null) return
+    const root = document.documentElement
+    root.dataset.dragging = ""
+    let last = 0
+    const step = (now: number) => {
+      const edge = Math.min(120, innerHeight / 4)
+      const { y, y0 } = pointer.current
+      const depth = y > y0 ? Math.max(0, y - innerHeight + edge) : -Math.max(0, edge - y)
+      scrollBy(0, (Math.max(-1, Math.min(1, depth / edge)) * 900 * Math.min(32, last && now - last)) / 1000)
+      last = now
+      frame = requestAnimationFrame(step)
+    }
+    let frame = requestAnimationFrame(step)
+    return () => {
+      cancelAnimationFrame(frame)
+      delete root.dataset.dragging
+    }
+  }, [dragging])
 
   function move(id: number, to: number) {
     const next = [...ids()]
@@ -154,15 +200,17 @@ function useDragOrder<T extends { id: number }>(items: T[], path: string, reload
       className: `relative z-1 bg-card transition-opacity data-[dragging]:z-0 data-[dragging]:opacity-40 ${dragging === null ? "" : "hover:bg-card"}`,
     }),
     handle: (id: number) => ({
-      onDragStart: (e: React.DragEvent<HTMLElement>) => {
+      onPointerDown: (e: React.PointerEvent<HTMLButtonElement>) => {
+        if (e.currentTarget.disabled || dragging !== null || e.button !== 0) return
         orderBeforeDrag.current = ids()
-        body.current = e.currentTarget.closest("tbody")
+        body.current = e.currentTarget.closest("tbody")!
+        // Captured by the rows' container, which stays put: the handle's row
+        // is moved in the document as it is displaced, and that releases a
+        // capture it holds, so a release outside the window would go unseen.
+        body.current.setPointerCapture(e.pointerId)
+        pointer.current = { id: e.pointerId, x: e.clientX, y: e.clientY, y0: e.clientY }
         setDragging(id)
-        e.dataTransfer.effectAllowed = "move"
-        // Firefox refuses to start a drag without a payload.
-        e.dataTransfer.setData("text/plain", String(id))
       },
-      onDragEnd: (e: React.DragEvent) => (e.dataTransfer.dropEffect === "none" ? cancel() : save(ids())),
       onKeyDown: (e: React.KeyboardEvent) => {
         const delta = e.key === "ArrowUp" ? -1 : e.key === "ArrowDown" ? 1 : 0
         if (!delta) return
@@ -180,9 +228,9 @@ function DragHandle({ name, disabled, title = "拖动排序", ...events }: React
   return (
     <button
       type="button"
-      draggable={!disabled}
       disabled={disabled}
-      className="cursor-grab touch-none rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground active:cursor-grabbing disabled:cursor-default disabled:opacity-40 disabled:hover:bg-transparent"
+      // A larger target for a finger, and no text selection from a press.
+      className="cursor-grab touch-none rounded p-1 text-muted-foreground select-none hover:bg-muted hover:text-foreground active:cursor-grabbing disabled:cursor-default disabled:opacity-40 disabled:hover:bg-transparent pointer-coarse:p-2"
       title={title}
       aria-label={`拖动 ${name} 排序`}
       {...events}
