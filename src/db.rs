@@ -3,12 +3,13 @@
 //! The history charts, whose scans are not, read through a second connection.
 
 use std::collections::{HashMap, HashSet};
-use std::sync::Mutex;
+use std::sync::{Mutex, MutexGuard, TryLockError};
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, Datelike, Local, NaiveDate, Utc};
 use rusqlite::{params, Connection, OpenFlags, OptionalExtension};
 use serde::{Deserialize, Serialize};
+use tokio::runtime::RuntimeFlavor;
 use tracing::info;
 
 pub struct Db {
@@ -933,6 +934,38 @@ impl Tally {
     }
 }
 
+/// Locks `mutex`, and when it is taken, waits with this thread's share of the
+/// runtime handed to another.
+///
+/// A vacuum or a restore holds the writer for as long as the disk takes to
+/// rewrite the file: minutes, on a slow one. Requests, browser streams, agent
+/// handshakes and the hourly housekeeping reach it from async tasks, and each
+/// waiting in place would take a worker thread with it: on one core with a
+/// browser stream open, a 13 s vacuum would hold every other request for 12.5 s.
+///
+/// ponytail: each waiter holds a blocking thread -- during a vacuum or a
+/// restore, every open browser stream and connected agent, plus each request
+/// arriving meanwhile. Past tokio's default of 512 the next waiter stalls a
+/// worker again; refuse waiters past a limit, as the history charts do, if
+/// hubs reach that.
+pub(crate) fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    match mutex.try_lock() {
+        Ok(guard) => guard,
+        Err(TryLockError::Poisoned(e)) => e.into_inner(),
+        Err(TryLockError::WouldBlock) => {
+            let wait = || mutex.lock().unwrap_or_else(|e| e.into_inner());
+            // `block_in_place` panics on a current-thread runtime, which is
+            // what `#[tokio::test]` runs. Off the runtime's workers -- in
+            // `spawn_blocking`, or already in `block_in_place` -- it calls the
+            // closure as it is.
+            match tokio::runtime::Handle::try_current().map(|h| h.runtime_flavor()) {
+                Ok(RuntimeFlavor::MultiThread) => tokio::task::block_in_place(wait),
+                _ => wait(),
+            }
+        }
+    }
+}
+
 impl Db {
     pub fn open(path: &str) -> Result<Self> {
         let conn = Connection::open(path)?;
@@ -953,8 +986,8 @@ impl Db {
         Ok(Self { reader, conn: Mutex::new(conn) })
     }
 
-    fn conn(&self) -> std::sync::MutexGuard<'_, Connection> {
-        self.conn.lock().unwrap_or_else(|e| e.into_inner())
+    fn conn(&self) -> MutexGuard<'_, Connection> {
+        lock(&self.conn)
     }
 
     /// The connection the history charts read through: the read-only one, or
@@ -974,7 +1007,7 @@ impl Db {
     ///
     /// The writer is taken after the reader here and must never be held while
     /// taking the reader.
-    fn reader(&self) -> std::sync::MutexGuard<'_, Connection> {
+    fn reader(&self) -> MutexGuard<'_, Connection> {
         let Some(reader) = &self.reader else { return self.conn() };
         let reader = reader.lock().unwrap_or_else(|e| e.into_inner());
         if bytes_of(&format!("{}-wal", reader.path().unwrap_or_default())) > 4 << 20 {
@@ -2262,16 +2295,28 @@ impl Db {
     /// `oldest` against `retention` is the one pair here that can indicate a
     /// fault: history older than the window means `prune` has not been running.
     pub fn stats(&self) -> Result<serde_json::Value> {
-        // Before acquiring the connection: `conn()` returns a guard on a plain
-        // Mutex, and `retention_days` acquires the same one.
+        // Before acquiring the connection, which for `:memory:` is the writer
+        // that `retention_days` acquires as well.
         let retention = self.retention_days();
-        let conn = self.conn();
-        let file = main_file(&conn);
+        // A read-only connection of its own: the counts scan every row of both
+        // tiers of history, which on a cold cache means reading most of the
+        // file -- 13 s for 52 MB at 4 MB/s. Through the writer, agent reports
+        // would wait out that read; through the charts' reader, so would the
+        // public page's history charts.
+        let (own, writer);
+        let conn: &Connection = if self.reader.is_some() {
+            own = read_only(&self.file())?;
+            &own
+        } else {
+            writer = self.conn();
+            &writer
+        };
+        let file = main_file(conn);
         let page_size: i64 = conn.query_row("PRAGMA page_size", [], |r| r.get(0))?;
         let free_pages: i64 = conn.query_row("PRAGMA freelist_count", [], |r| r.get(0))?;
         // Across both tiers: history begins at whichever row is earliest, and
         // a minute row can predate the hourly tier while a rollup catches up.
-        let oldest = oldest(&conn, &["metric_hour", "ping_hour", "metric", "ping_record"])?;
+        let oldest = oldest(conn, &["metric_hour", "ping_hour", "metric", "ping_record"])?;
         let mut rows = serde_json::Map::new();
         for table in TABLES {
             let n: i64 = conn.query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |r| r.get(0))?;
@@ -2612,6 +2657,51 @@ mod tests {
 
     fn db() -> Db {
         Db::open(":memory:").unwrap()
+    }
+
+    /// One worker, as on a one-core hub: a task waiting for the writer must not
+    /// keep it, or the timer below would never fire.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+    async fn waiting_for_the_writer_leaves_the_runtime_running() {
+        let db = std::sync::Arc::new(db());
+        let (locked, taken) = std::sync::mpsc::channel();
+        let (release, held) = std::sync::mpsc::channel::<()>();
+        std::thread::scope(|s| {
+            let holder = &db;
+            s.spawn(move || {
+                let _conn = holder.conn();
+                locked.send(()).unwrap();
+                let _ = held.recv();
+            });
+            taken.recv().unwrap();
+            let db = db.clone();
+            tokio::spawn(async move { db.get("site_name") });
+            let (fired, ticks) = std::sync::mpsc::channel();
+            tokio::spawn(async move {
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                fired.send(()).unwrap();
+            });
+            let outcome = ticks.recv_timeout(std::time::Duration::from_secs(5));
+            drop(release);
+            assert!(outcome.is_ok(), "a timer must fire while a task waits for the writer");
+        });
+    }
+
+    /// The data page's counts must not queue behind a history chart holding
+    /// the reader, nor hold it while the public page's charts wait.
+    #[test]
+    fn stats_do_not_take_the_charts_reader() {
+        let scratch = Scratch::new();
+        let db = Db::open(&scratch.0).unwrap();
+        let chart = db.reader.as_ref().unwrap().lock().unwrap();
+        let (done, finished) = std::sync::mpsc::channel();
+        let outcome = std::thread::scope(|s| {
+            s.spawn(|| done.send(db.stats().is_ok()).unwrap());
+            let outcome = finished.recv_timeout(std::time::Duration::from_secs(5));
+            drop(chart);
+            outcome
+        });
+        assert_eq!(outcome, Ok(true), "stats must not wait for the reader");
     }
 
     /// PRAGMA settings are per connection, so a value read through any other
