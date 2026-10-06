@@ -502,7 +502,7 @@ async fn main() -> Result<()> {
         .route("/api/nodes/order", put(api::reorder_nodes))
         .route("/api/nodes/batch", put(api::update_nodes))
         .route("/api/nodes/{id}", put(api::update_node).delete(api::delete_node))
-        .route("/api/nodes/{id}/token", post(api::reset_token))
+        .route("/api/nodes/{id}/token", get(api::node_token).post(api::reset_token))
         .route("/api/nodes/{id}/traffic", put(api::patch_traffic))
         .route("/api/nodes/{id}/ping-tasks", put(api::set_node_ping_tasks))
         .route("/api/ping-tasks", get(api::ping_tasks).post(api::save_ping_task))
@@ -553,20 +553,7 @@ async fn main() -> Result<()> {
                 .layer(tower_http::limit::RequestBodyLimitLayer::new(64 * 1024))
                 .with_state(app.clone()),
         )
-        // Excludes the agent binary, already compressed, and database backups,
-        // hundreds of megabytes on a large fleet: deflating either would occupy
-        // the cores argon2 and the SQLite writer share for the whole transfer.
-        .layer(
-            tower_http::compression::CompressionLayer::new().compress_when(
-                tower_http::compression::predicate::DefaultPredicate::new()
-                    .and(tower_http::compression::predicate::NotForContentType::const_new(
-                        "application/octet-stream",
-                    ))
-                    .and(|status: StatusCode, _: Version, _: &HeaderMap, _: &Extensions| {
-                        status != StatusCode::SWITCHING_PROTOCOLS
-                    }),
-            ),
-        )
+        .layer(tower_http::compression::CompressionLayer::new().compress_when(compressible()))
         .with_state(app);
 
     let listener = match tokio::net::TcpListener::bind(args.listen).await {
@@ -824,6 +811,29 @@ fn until_next_hour<Tz: TimeZone>(now: DateTime<Tz>) -> std::time::Duration {
     std::time::Duration::from_secs(u64::from(3_600 - now.minute() * 60 - now.second()))
 }
 
+/// Which answers the hub compresses. Not the agent binary, already compressed,
+/// nor database backups, hundreds of megabytes on a large fleet: deflating either
+/// would occupy the cores argon2 and the SQLite writer share for the whole
+/// transfer. Nor an answer marked `no-transform`, which Cloudflare leaves
+/// uncompressed as well: the admin node list, whose secrets sit beside strings an
+/// agent reports, so that the length of a compressed copy would let one rogue
+/// agent guess them a character at a time. nginx's gzip ignores the directive,
+/// so a proxy configured to compress JSON compresses this answer regardless.
+fn compressible() -> impl Predicate {
+    tower_http::compression::predicate::DefaultPredicate::new()
+        .and(tower_http::compression::predicate::NotForContentType::const_new("application/octet-stream"))
+        .and(|status: StatusCode, _: Version, headers: &HeaderMap, _: &Extensions| {
+            // Directives are case-insensitive and comma-separated.
+            let no_transform = headers
+                .get_all(header::CACHE_CONTROL)
+                .iter()
+                .filter_map(|v| v.to_str().ok())
+                .flat_map(|v| v.split(','))
+                .any(|d| d.trim().eq_ignore_ascii_case("no-transform"));
+            status != StatusCode::SWITCHING_PROTOCOLS && !no_transform
+        })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -846,6 +856,25 @@ mod tests {
             headers.insert("x-forwarded-proto", scheme.parse().unwrap());
         }
         headers
+    }
+
+    #[test]
+    fn an_answer_marked_no_transform_is_left_uncompressed() {
+        let json = |cache: Option<&'static str>| {
+            let mut res = Response::new(axum::body::Body::from("x".repeat(1024)));
+            res.headers_mut().insert(header::CONTENT_TYPE, "application/json".parse().unwrap());
+            if let Some(cache) = cache {
+                res.headers_mut().insert(header::CACHE_CONTROL, cache.parse().unwrap());
+            }
+            res
+        };
+        assert!(compressible().should_compress(&json(None)));
+        assert!(!compressible().should_compress(&json(Some("no-store, no-transform"))));
+        assert!(!compressible().should_compress(&json(Some("No-Transform"))), "directives ignore case");
+        assert!(
+            compressible().should_compress(&json(Some("x-no-transform-ext"))),
+            "only the directive itself"
+        );
     }
 
     /// Whichever wildcard this kernel supports must parse and carry the default
