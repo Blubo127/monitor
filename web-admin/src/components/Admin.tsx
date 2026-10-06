@@ -452,7 +452,8 @@ function Field({ label, hint, help, helpWidth, className = "", children }: {
     <div className={`space-y-2 ${className}`}>
       {help ? <div className="flex items-center gap-1.5">{title}<Help width={helpWidth}>{help}</Help></div> : title}
       {children}
-      {hint && <p className="text-xs leading-relaxed text-muted-foreground">{hint}</p>}
+      {/* Kept whole between punctuation, as in Help below. */}
+      {hint && <p className="text-xs leading-relaxed text-muted-foreground break-keep wrap-anywhere">{hint}</p>}
     </div>
   )
 }
@@ -2573,10 +2574,74 @@ function useSettings() {
   }
 }
 
+// The hub's limit on each icon, which keeps both under its 64 KiB body limit.
+const ICON_BYTES = 20 * 1024
+
+const decodedBytes = (url: string) => Math.floor(((url.length - url.indexOf(",") - 1) * 3) / 4)
+
+// `img` contained in a `side`-pixel square, centred.
+function drawIcon(img: HTMLImageElement, side: number, background: string | null, type: string, quality?: number) {
+  const canvas = document.createElement("canvas")
+  canvas.width = canvas.height = side
+  const context = canvas.getContext("2d")!
+  if (background) {
+    context.fillStyle = background
+    context.fillRect(0, 0, side, side)
+  }
+  // An SVG without width and height has no intrinsic size; drawn square.
+  const w = img.naturalWidth || side
+  const h = img.naturalHeight || side
+  const scale = side / Math.max(w, h)
+  context.drawImage(img, (side - w * scale) / 2, (side - h * scale) / 2, w * scale, h * scale)
+  return canvas.toDataURL(type, quality)
+}
+
+// The two icons the hub serves from one picked image: the tab icon, an SVG kept
+// as it is or anything else scaled to 64 px (32 px at 2x), and the 180 px
+// apple-touch-icon iOS puts on the home screen. iOS fills a transparent one
+// with black, so it is drawn on white; a photo too detailed for a 20 KiB PNG
+// falls back to JPEG.
+async function siteIcons(file: File) {
+  const url = URL.createObjectURL(file)
+  try {
+    const img = new Image()
+    img.src = url
+    await img.decode().catch(() => {
+      throw new Error("这张图片打不开，换一张 PNG、SVG 或 ICO 试试")
+    })
+    const favicon =
+      file.type === "image/svg+xml" && file.size <= ICON_BYTES
+        ? await new Promise<string>((resolve, reject) => {
+            const reader = new FileReader()
+            reader.onload = () => resolve(String(reader.result))
+            reader.onerror = () => reject(new Error("读取图片失败，请重新选择"))
+            reader.readAsDataURL(file)
+          })
+        : drawIcon(img, 64, null, "image/png")
+    let touch = drawIcon(img, 180, "#fff", "image/png")
+    for (let quality = 0.9; decodedBytes(touch) > ICON_BYTES && quality > 0.3; quality -= 0.15) {
+      touch = drawIcon(img, 180, "#fff", "image/jpeg", quality)
+    }
+    return { favicon, touch_icon: touch }
+  } finally {
+    URL.revokeObjectURL(url)
+  }
+}
+
 // `onSaved` refreshes what the header shows, the site name among it.
 function SettingsTab({ onSaved }: { onSaved: () => void }) {
   const { s, set, save } = useSettings()
+  const iconPicker = useRef<HTMLInputElement>(null)
   if (!s) return null
+  // Applied on its own, as soon as a file is picked: a picked file is already a
+  // decision, and the form's save button below is easy to miss for it.
+  const saveIcons = (icons: { favicon: string; touch_icon: string }, done: string) =>
+    save(icons, done).then((ok) => {
+      // The tab's icon is cached under its fixed URL; a new query fetches the
+      // one just saved.
+      const link = document.querySelector<HTMLLinkElement>('link[rel="icon"]')
+      if (ok && link) link.href = `/admin/favicon.svg?${Date.now()}`
+    })
 
   return (
     <div className="space-y-4">
@@ -2611,9 +2676,50 @@ function SettingsTab({ onSaved }: { onSaved: () => void }) {
               placeholder="30"
             />
           </Field>
+          <Field label="站点图标" hint="标签页、书签和手机主屏幕上的图标，选好即生效，换主题也保留">
+            <div className="flex items-center gap-2">
+              {!s.favicon && <span className="text-sm text-muted-foreground">默认</span>}
+              <div className="flex size-9 shrink-0 items-center justify-center rounded-md border">
+                <img src={String(s.favicon || "/favicon.svg?theme")} alt="站点图标" className="size-6 object-contain" />
+              </div>
+              <Button size="sm" variant="outline" onClick={() => iconPicker.current?.click()}>
+                <Upload /> 选择图标
+              </Button>
+              {s.favicon && (
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => saveIcons({ favicon: "", touch_icon: "" }, "已换回主题自带的图标")}
+                >
+                  用主题自带的
+                </Button>
+              )}
+              <input
+                ref={iconPicker}
+                type="file"
+                accept="image/png,image/x-icon,image/svg+xml,image/webp,image/jpeg,image/gif,.ico"
+                className="hidden"
+                onChange={(e) => {
+                  const file = e.target.files?.[0]
+                  e.target.value = ""
+                  if (!file) return
+                  siteIcons(file).then(
+                    (icons) => saveIcons(icons, "站点图标已更新"),
+                    (e: Error) => toast.error(e.message),
+                  )
+                }}
+              />
+            </div>
+          </Field>
           <Field
             label="GitHub 代理"
-            hint="留空直连。仅在 hub 自己拉不到 GitHub Release 时填。这个地址返回的字节会被安装到每一台节点上，只填信得过的镜像"
+            helpWidth="max-w-58 min-[376px]:max-w-86 min-[432px]:max-w-100"
+            help={
+              <>
+                <p>留空直连。仅在 hub 自己拉不到 GitHub Release 时填。</p>
+                <p>这个地址返回的字节会被安装到每一台节点上，只填信得过的镜像。</p>
+              </>
+            }
           >
             <Input
               value={String(s.github_proxy ?? "")}
