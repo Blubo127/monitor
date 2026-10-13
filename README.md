@@ -4,6 +4,8 @@
 
 安装与升级：[INSTALL.md](./INSTALL.md)。发布自己的二进制和镜像：[RELEASE.md](./RELEASE.md)。
 
+定制版代码和文档位于 [`diy` 分支](https://github.com/Blubo127/monitor/tree/diy)。仓库首页展示默认分支的 README；要让首页显示本版本，需同步默认分支，具体见[分支与仓库首页](./RELEASE.md#分支与仓库首页)。
+
 安装器、agent 下载和版本检查使用上述自有仓库的正式 Release，Docker 镜像使用 `ghcr.io/blubo127/monitor`。使用前请确认相应发布物已生成；尚未发布时，可先[从源码构建 hub](./INSTALL.md#从源码构建)。维护者首次发布的准备工作见[发布指南](./RELEASE.md#首次发布准备)。
 
 ## 特性

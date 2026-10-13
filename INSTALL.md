@@ -155,6 +155,12 @@ cargo build --release --locked
 
 ## 卸载和备份
 
+日常备份可在后台“数据 → 导出备份”下载一致的数据库快照；运行中不要只复制 `monitor.db`，否则可能遗漏仍在 SQLite 预写日志中的数据。“导入备份”会覆盖当前数据库中的节点、设置和历史，并使现有登录会话失效。
+
+导出的数据库不包含磁盘上的主题文件。完整迁移时，停止 hub 后备份整个 `/opt/monitor/data/`；Docker 部署则停止容器后备份挂载到 `/data` 的数据卷。手动部署时使用实际的数据库和主题目录，恢复后确保 hub 运行用户拥有写入权限。
+
+卸载命令：
+
 ```bash
 sudo sh ./install-hub.sh --uninstall
 sudo sh ./install-agent.sh --uninstall

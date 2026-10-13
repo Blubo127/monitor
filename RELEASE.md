@@ -14,9 +14,19 @@
 
 `ghcr.io/blubo127/monitor` 是发布目标。实际可拉取的镜像标签和权限应在发布工作流成功后核对。
 
+## 分支与仓库首页
+
+2026-10-13 核对远程分支和 README：本仓库的定制改动已在 `diy`，GitHub 默认分支仍是 `main`，其中的 README 仍为上游原版。仅向 `diy` 推送文档不会改变仓库首页的默认展示内容。
+
+如果长期在 `diy` 维护，可在 GitHub 仓库设置中将默认分支改为 `diy`；如果希望以 `main` 作为对外入口，则先将经过检查的定制改动合入 `main`。发布 tag 应指向包含自有下载地址的提交；将帮助文档迁到其他分支时，还需同步 `install-hub.sh` 和 `web-admin/src/components/Admin.tsx` 中的文档链接。
+
+配套 agent 的 CI 会从 `Blubo127/monitor` 检出 `scripts/e2e.sh`，其 checkout 未指定 `ref`，因此使用本仓库的默认分支。调整默认分支或集成测试脚本时，需要同时核对这个依赖。
+
 ## 版本和触发方式
 
-两个仓库的 release workflow 都监听 `v*` tag 的 push，并提供 `workflow_dispatch`。推送版本 tag 才是正式发布流程；在 `main` 或 `diy` 分支手动运行 `workflow_dispatch` 只构建和收集 Actions artifacts，发布步骤受 `refs/tags/` 条件限制，不会创建 Release 或推送镜像。
+两个仓库的 release workflow 都监听 `v*` tag 的 push，并提供 `workflow_dispatch`。发布步骤以运行的 ref 是否为 `refs/tags/` 开头作为条件：推送版本 tag 会正式发布，手动运行时指定 tag ref 也会执行发布。在分支 ref（例如 `diy`）上手动运行才只构建和收集 Actions artifacts，不会创建 Release 或推送镜像。
+
+当前工作流面向正式版本，没有测试版发布分流：创建 Release 时未指定 `--prerelease`，hub 镜像发布也会写入 `latest`。仅将 tag 命名为 `v...-beta` 不能避免影响正式发布入口；测试构建应选择分支 ref。
 
 版本 tag 必须与该 tag 所指提交的 `Cargo.toml` 中 `[package].version` 完全一致，格式为前缀 `v` 加版本号。工作流在构建时检查两者，不一致会直接失败。例如：
 
@@ -52,7 +62,7 @@ sh scripts/e2e.sh target/debug/monitor-hub ../agent/target/debug/monitor-agent
 
 1. 在 agent 仓库确认 fork Actions 已启用，检查自有下载/版本配置；首次发布先完成上一节的源码配对检查，后续发布运行完整 CI。在开发分支手动执行 release workflow 预检构建。修改版本后，在目标提交创建并推送匹配的 `v*` tag。
 2. 等待 agent release workflow 成功，确认 Release 不是 draft/prerelease，并检查两个架构二进制及 `sha256sums.txt` 都已上传。hub 的 agent 下载和 CI 使用 `Blubo127/agent` 的 latest Release，首次 hub 发布前先有 agent 发布版。
-3. 在 hub 仓库运行 CI，确认二进制构建使用 `web-theme.pin` 固定的上游默认主题，安装器和更新检查指向自有仓库。可在 `diy` 或 `main` 手动运行 release workflow 预检。
+3. 在 hub 仓库运行 CI，确认二进制构建使用 `web-theme.pin` 固定的上游默认主题，安装器和更新检查指向自有仓库。在包含本 fork 改动的分支（目前为 `diy`）手动运行 release workflow 预检。
 4. 在 hub 的目标提交创建并推送与 package 版本匹配的 `v*` tag，等待两个架构构建、GitHub Release 和 GHCR 推送全部完成。
 5. 从自己的 Release 下载二进制与校验文件，在隔离环境检查安装、升级和 agent 连接，再按 [INSTALL.md](./INSTALL.md) 部署。
 
