@@ -1211,7 +1211,7 @@ function upgradeCommand(site: string) {
   return scriptCommand(site, () => ["--upgrade"])
 }
 
-export type Versions = { hub: string; hub_latest: string; agent_latest: string; notice: boolean }
+export type Versions = { hub: string; hub_latest: string; agent_latest: string; hub_repo: string; agent_repo: string; notice: boolean }
 
 /**
  * What is running and what is published. Read once per panel load: the hub holds
@@ -1327,7 +1327,7 @@ function RegisterDialog({ site, reg, onClose }: {
                 要给某台单独起名，在它执行的命令末尾加 <code>--name 名字</code>，只对新建的节点生效。
                 <a
                   className="ml-1 underline underline-offset-2 hover:text-foreground"
-                  href="https://monitor-document.pages.dev/install/batch"
+                  href="https://github.com/Blubo127/monitor/blob/diy/INSTALL.md#批量安装与升级"
                   target="_blank"
                   rel="noreferrer"
                 >
@@ -2469,7 +2469,7 @@ function Themes() {
             </Help>
             <Button size="sm" variant="ghost" className="-my-1 -mr-2.5 ml-auto h-7" asChild>
               <a href="https://monitor-themes.pages.dev" target="_blank" rel="noreferrer">
-                <Palette /> 浏览主题
+                <Palette /> 浏览上游主题
               </a>
             </Button>
           </div>
@@ -3453,7 +3453,7 @@ function Data() {
   )
 }
 
-const releaseUrl = (repo: string, version: string) => `https://github.com/monitor-probe/${repo}/releases/tag/v${version}`
+const releaseUrl = (repo: string, version: string) => `https://github.com/${repo}/releases/tag/${encodeURIComponent(`v${version}`)}`
 
 /** `v1.2.0 → v1.3.0` when something is published, the running version alone otherwise. */
 function VersionPair({ current, latest }: { current: string; latest: string }) {
@@ -3515,7 +3515,7 @@ function Update({ versions, reload, nodes, site, refusal }: {
       {unreachable && (
         <Card className="p-5">
           <p className="text-sm text-muted-foreground">
-            查不到最新版本：这台 hub 连不上 api.github.com。GitHub 代理不作用于这一项。
+            查不到最新版本：发布仓库尚无正式 Release，或 hub 无法读取 api.github.com。GitHub 代理不作用于版本查询。
           </p>
         </Card>
       )}
@@ -3527,7 +3527,7 @@ function Update({ versions, reload, nodes, site, refusal }: {
             <VersionPair current={versions.hub} latest={versions.hub_latest} />
             {behind(versions.hub, versions.hub_latest) && (
               <Button size="sm" variant="ghost" asChild>
-                <a href={releaseUrl("monitor", versions.hub_latest)} target="_blank" rel="noreferrer">
+                <a href={releaseUrl(versions.hub_repo, versions.hub_latest)} target="_blank" rel="noreferrer">
                   发布说明
                 </a>
               </Button>
@@ -3563,13 +3563,13 @@ function Update({ versions, reload, nodes, site, refusal }: {
                   </Button>
                   {versions.agent_latest && (
                     <Button size="sm" variant="ghost" asChild>
-                      <a href={releaseUrl("agent", versions.agent_latest)} target="_blank" rel="noreferrer">
+                      <a href={releaseUrl(versions.agent_repo, versions.agent_latest)} target="_blank" rel="noreferrer">
                         发布说明
                       </a>
                     </Button>
                   )}
                   <Button size="sm" variant="ghost" asChild>
-                    <a href="https://monitor-document.pages.dev/install/batch" target="_blank" rel="noreferrer">
+                    <a href="https://github.com/Blubo127/monitor/blob/diy/INSTALL.md#批量安装与升级" target="_blank" rel="noreferrer">
                       批量升级的做法
                     </a>
                   </Button>

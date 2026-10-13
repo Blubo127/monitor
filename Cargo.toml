@@ -4,7 +4,7 @@ version = "1.4.0"
 edition = "2021"
 license = "MIT"
 description = "Lightweight server monitoring hub"
-repository = "https://github.com/monitor-probe/monitor"
+repository = "https://github.com/Blubo127/monitor"
 
 [dependencies]
 anyhow = "1"

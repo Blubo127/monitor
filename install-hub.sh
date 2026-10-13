@@ -1,7 +1,7 @@
 #!/bin/sh
 # monitor hub installer.
 #
-#   curl -fsSL https://github.com/monitor-probe/monitor/releases/latest/download/install-hub.sh -o install-hub.sh
+#   curl -fsSL https://github.com/Blubo127/monitor/releases/latest/download/install-hub.sh -o install-hub.sh
 #   chmod +x install-hub.sh
 #   sudo ./install-hub.sh
 #
@@ -14,7 +14,7 @@ set -eu
 # Debian does not set it.
 PATH="$PATH:/usr/sbin:/sbin"
 
-REPO="monitor-probe/monitor"
+REPO="Blubo127/monitor"
 SERVICE="monitor-hub"
 UNIT="/etc/systemd/system/monitor-hub.service"
 # Everything but the unit lives under one directory: the two binaries at the top,
@@ -359,7 +359,7 @@ UNIT
 		printf '     配好之后用域名访问面板，我相信这难不倒你。\n'
 		# The documented configurations use the default port.
 		[ "$PORT" = 28080 ] || printf '     文档里的 28080 换成 %s。\n' "$PORT"
-		printf '     反向代理文档：https://monitor-document.pages.dev/install/reverse-proxy\n'
+		printf '     安装与反向代理：https://github.com/Blubo127/monitor/blob/diy/INSTALL.md\n'
 	fi
 }
 
@@ -473,7 +473,7 @@ monitor hub 安装器
   --help, -h     显示这段
 
 hub 只监听 127.0.0.1，公网访问不到，需要自己配 nginx / caddy / CF 隧道把
-域名指过来，配法见 https://monitor-document.pages.dev/install/reverse-proxy
+域名指过来，配法见 https://github.com/Blubo127/monitor/blob/diy/INSTALL.md
 
 重跑一次就是升级：校验通过后才替换二进制，起不来会自动回滚到上一版；
 没写的参数沿用上次的，所以升级不会把端口和 --site 冲掉。

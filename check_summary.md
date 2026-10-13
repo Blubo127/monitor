@@ -1,17 +1,21 @@
-# monitor 仓库安全检查摘要
+# monitor 仓库安全检查摘要（历史记录）
 
-检查日期：2026-10-09  
-检查对象：当前工作区 `/home/nlpz/wp/proj/moni/monitor`  
-分支：`diy`  
-提交：`d8d8283ee9a637b3896f7e89808f8610a4462076`  
-远程：`git@github.com:Blubo127/monitor.git`  
-审计开始时：除本报告外无代码改动；当前新增未跟踪文件为 `check_summary.md`
+本文保留 2026-10-09 对指定提交的检查记录。下文的代码行号、上游下载地址和分支关系均反映检查时的状态，不代表后续版本已经接受同样的检查。本 fork 的安装与发布说明见 [INSTALL.md](./INSTALL.md) 和 [RELEASE.md](./RELEASE.md)。
+
+- 检查日期：2026-10-09
+- 检查对象：[Blubo127/monitor](https://github.com/Blubo127/monitor)
+- 检查时分支：`diy`
+- 受检提交：[d8d8283ee9a637b3896f7e89808f8610a4462076](https://github.com/Blubo127/monitor/tree/d8d8283ee9a637b3896f7e89808f8610a4462076)
+- 检查时远程：`git@github.com:Blubo127/monitor.git`
+- 检查范围：上述提交中的源码和配置，不包含后续的 fork 地址迁移改动。
+
+本分支现已将 hub 安装、agent 下载和版本检查的来源对齐到 `Blubo127/monitor`、`Blubo127/agent`，内置默认主题仍使用上游固定版本。下文 F-04、F-09 中的 `monitor-probe/*` 地址用于记录历史证据；地址迁移本身不构成一次新的安全审计。
 
 ## 结论
 
-在当前提交的 Rust、Shell、前端、Docker、CI 和锁定依赖配置中，没有发现“后台定时把数据库或服务器文件上传到固定陌生地址”的明显后门，也没有发现运行时执行任意 Shell 命令的代码。源码中的外联大多对应明确功能。
+在受检提交的 Rust、Shell、前端、Docker、CI 和锁定依赖配置中，没有发现“后台定时把数据库或服务器文件上传到固定陌生地址”的明显后门，也没有发现运行时执行任意 Shell 命令的代码。源码中的外联大多对应明确功能。
 
-这不等于可以无条件信任。当前版本有几个实际的泄密和供应链风险：
+这不等于可以无条件信任。受检版本有几个实际的泄密和供应链风险：
 
 1. 每个节点的公网 IP 会发送给 `ipinfo.io` 做国家查询。
 2. 配置通知后，节点名称、登录 IP、流量/掉线/到期信息会发送到 Telegram 或管理员填写的 Webhook。
@@ -19,7 +23,7 @@
 4. agent 二进制由 hub 从 GitHub 或配置的 HTTPS 代理中继，安装脚本只检查 ELF 文件头，没有独立的哈希或签名校验。代理、发布物或 fork 被替换时，会把不可信程序安装到节点服务中。
 5. hub 手动运行和 Docker 默认监听通配地址。若直接暴露端口，面板会以明文 HTTP 传输会话和 agent token；`--insecure` 还允许通过明文链路下载 agent。
 
-因此，按默认官方安装器、只使用默认主题、全程 HTTPS、关闭不需要的通知和 OAuth 时，未见明显的隐藏外传后门；按当前仓库直接编译、安装第三方主题、使用 HTTP/任意代理或把端口直接暴露公网时，风险会明显升高。不能把这个静态检查当作对二进制、依赖漏洞或远端发布物的保证。
+因此，按受检提交中的 hub 安装器、只使用默认主题、全程 HTTPS、关闭不需要的通知和 OAuth 时，未见明显的隐藏外传后门；直接编译未审查的代码、安装第三方主题、使用 HTTP/任意代理或把端口直接暴露公网时，风险会明显升高。不能把这个静态检查当作对二进制、依赖漏洞或远端发布物的保证。
 
 ## 发现明细
 
@@ -33,10 +37,10 @@
 | F-06 | 中（凭据/数据暴露） | `src/api.rs:1547-1670`；`src/db.rs:691-713,969-978` | 管理员可以下载整库备份。数据库包含明文 node token、GitHub client secret、密码哈希、会话等敏感数据；程序会尽力设置 `0600`，但备份文件和传输链路仍需按密钥材料保护。 |
 | F-07 | 低至中（预期外联） | `src/auth.rs:208-216,334-398`；`src/api.rs:1808-1820,1970-2006` | GitHub OAuth 会向 GitHub 发送 client ID/secret、授权 code，并用 access token 请求 `/user`；版本检查和主题更新会请求 GitHub API/release。它们不是隐藏通道，但会让 hub 与 GitHub 通信并把 OAuth 凭据交给 GitHub。 |
 | F-08 | 中（构建供应链） | `build.rs:7-20`；`scripts/theme.sh:19-49`；`.github/workflows/*.yml` | `cargo build` 会执行仓库脚本并下载默认主题；主题包按 `web-theme.pin` 的 SHA-256 校验。锁文件使用 crates.io/npm registry 和完整性哈希，未见自定义 `postinstall`。Docker 的 `alpine:3`、CI action 的 major/stable 标签仍是可变供应链输入。 |
-| F-09 | 中（来源可信度） | `Cargo.toml:7`；Git remote；`git log --show-signature` | 当前 remote 是 `Blubo127/monitor`，而 Cargo、agent、主题和发布地址主要指向 `monitor-probe/*`。当前 `diy` 与本地 `main/origin/main` 同为上述提交，但 fork 与上游/发布物的关系需要自行确认。提交显示 GPG key `B5690EEEBB952194`，本机没有公钥，签名尚未验证。 |
+| F-09 | 中（来源可信度） | `Cargo.toml:7`；Git remote；`git log --show-signature` | 检查时 remote 是 `Blubo127/monitor`，而 Cargo、agent、主题和发布地址主要指向 `monitor-probe/*`。检查时 `diy` 与本地 `main/origin/main` 同为上述提交，但 fork 与上游/发布物的关系需要自行确认。提交显示 GPG key `B5690EEEBB952194`，检查环境没有公钥，签名未验证。 |
 | F-10 | 信息泄露面（产品行为） | `src/api.rs:107-130,324-357` | 默认 public page 开启；标记为 public 的节点会向匿名访问者展示系统/内核/架构、CPU/内存/磁盘、流量、国家、在线状态等指标。这不是隐藏上传，但会暴露服务器指纹和运行状态；可关闭 public page 或取消节点的 public 标记。 |
 
-## 当前代码中的外联清单
+## 受检代码中的外联清单
 
 | 目标 | 触发条件 | 发送内容 |
 |---|---|---|
@@ -60,4 +64,4 @@
 
 ## 检查边界
 
-本次检查以当前提交的源码和配置为对象，采用静态阅读、全文搜索、Git 历史/锁文件/安装脚本检查；没有运行仓库中的未知二进制、构建脚本或安装脚本，也没有对 crates.io/npm 包逐个审计源码、执行完整 CVE 扫描或验证远端 release 的签名。因此结论是“当前源码未见明显隐藏后门，存在已列出的明确外联和供应链风险”，不是对所有未来更新、远端二进制或依赖漏洞的安全保证。
+本次检查以上述受检提交的源码和配置为对象，采用静态阅读、全文搜索、Git 历史/锁文件/安装脚本检查；没有运行仓库中的未知二进制、构建脚本或安装脚本，也没有对 crates.io/npm 包逐个审计源码、执行完整 CVE 扫描或验证远端 release 的签名。因此结论是“受检源码未见明显隐藏后门，存在已列出的明确外联和供应链风险”，不是对所有未来更新、远端二进制或依赖漏洞的安全保证。

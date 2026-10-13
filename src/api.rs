@@ -1778,6 +1778,9 @@ pub async fn versions(_: Admin, State(app): State<Shared>) -> Json<Value> {
     };
     Json(json!({
         "hub": env!("CARGO_PKG_VERSION"),
+        // The panel builds release links from the same repositories queried here.
+        "hub_repo": crate::HUB_REPO,
+        "agent_repo": crate::AGENT_REPO,
         // Empty where GitHub could not be reached, which the panel renders as no
         // update rather than as an error: a hub on a network that cannot reach
         // github.com is a supported deployment, not a fault to report.

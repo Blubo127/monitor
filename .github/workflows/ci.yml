@@ -2,7 +2,7 @@ name: ci
 
 on:
   push:
-    branches: [main]
+    branches: [main, diy]
     # Prose changes nothing a compiler or linter can check.
     paths-ignore: ["**.md", "LICENSE"]
   pull_request:
@@ -54,6 +54,6 @@ jobs:
       # between the two repositories, and what the public view withholds.
       - run: cargo build
       - run: |
-          curl -fsSL -o agent https://github.com/monitor-probe/agent/releases/latest/download/monitor-agent-x86_64-unknown-linux-musl
+          curl -fsSL -o agent https://github.com/Blubo127/agent/releases/latest/download/monitor-agent-x86_64-unknown-linux-musl
           chmod +x agent
       - run: scripts/e2e.sh target/debug/monitor-hub ./agent
